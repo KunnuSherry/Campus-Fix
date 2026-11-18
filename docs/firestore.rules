@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+
+    function isCollegeMember(collegeId) {
+      return isAuthenticated() && getUserData().college_id == collegeId;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (getUserData().role == 'superadmin' || request.auth.token.role == 'superadmin');
+    }
+
+    function isCollegeAdmin(collegeId) {
+      return isAuthenticated() && (getUserData().role == 'admin' || request.auth.token.role == 'admin') && getUserData().college_id == collegeId;
+    }
+
+    function isDepartmentRep(collegeId, departmentId) {
+      return isAuthenticated() && (getUserData().role == 'rep' || request.auth.token.role == 'rep') &&
+             getUserData().college_id == collegeId && getUserData().department_id == departmentId;
+    }
+
+    // Colleges Collection
+    match /colleges/{collegeId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
+    }
+
+    // College Allowed Domains
+    match /college_domains/{domainId} {
+      allow read: if true; // Public check during domain onboarding
+      allow write: if isSuperAdmin() || isCollegeAdmin(request.resource.data.college_id);
+    }
+
+    // User Profiles
+    match /profiles/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || getUserData().college_id == resource.data.college_id);
+      allow create, update: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin() || isCollegeAdmin(resource.data.college_id));
+      allow delete: if isSuperAdmin();
+    }
+
+    // Departments
+    match /departments/{deptId} {
+      allow read: if isAuthenticated();
+      allow write: if isCollegeAdmin(request.resource.data.college_id);
+    }
+
+    // Documents & Doc Chunks
+    match /documents/{docId} {
+      allow read: if isAuthenticated() && isCollegeMember(resource.data.college_id);
+      allow write: if isCollegeAdmin(request.resource.data.college_id);
+    }
+
+    match /doc_chunks/{chunkId} {
+      allow read: if isAuthenticated() && isCollegeMember(resource.data.college_id);
+      allow write: if isCollegeAdmin(request.resource.data.college_id);
+    }
+
+    // Reports
+    match /reports/{reportId} {
+      // Students see only their own reports.
+      // Representatives see only reports assigned to their department.
+      // Admins see all reports for their college.
+      allow read: if isAuthenticated() && (
+        (resource.data.student_id == request.auth.uid) ||
+        isDepartmentRep(resource.data.college_id, resource.data.department_id) ||
+        isCollegeAdmin(resource.data.college_id)
+      );
+      allow create: if isAuthenticated() && request.resource.data.student_id == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (resource.data.student_id == request.auth.uid) ||
+        isDepartmentRep(resource.data.college_id, resource.data.department_id) ||
+        isCollegeAdmin(resource.data.college_id)
+      );
+      allow delete: if isCollegeAdmin(resource.data.college_id);
+    }
+
+    // Report Messages
+    match /report_messages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+    }
+
+    // Report Events (Timeline)
+    match /report_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+    }
+
+    // COMMUNITY MESSAGES
+    // CRITICAL SECURITY RULE:
+    // Normal clients CANNOT directly create community messages!
+    // Every message MUST be approved by the FastAPI Groq/Qwen moderation service.
+    match /community_messages/{msgId} {
+      allow read: if isAuthenticated() && isCollegeMember(resource.data.college_id) && resource.data.removed == false;
+      allow create: if false; // Denied to client direct writes; server service-role only!
+      allow update: if isAuthenticated() && isCollegeMember(resource.data.college_id); // Allowed for flagging
+      allow delete: if isCollegeAdmin(resource.data.college_id);
+    }
+
+    // Message Analysis & Admin Insights (Aggregate only)
+    match /message_analysis/{analysisId} {
+      allow read, write: if false; // Server backend access only
+    }
+
+    // Teachers List
+    match /teachers/{teacherId} {
+      allow read: if isAuthenticated() && isCollegeMember(resource.data.college_id);
+      allow write: if isCollegeAdmin(request.resource.data.college_id);
+    }
+
+    // Audit Log
+    match /audit_log/{logId} {
+      allow read: if isSuperAdmin();
+      allow write: if false; // Server writes only
+    }
+  }
+}
+

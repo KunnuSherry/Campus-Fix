@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // College PDFs (Academic notices, timetables, circulars)
+    match /colleges/{collegeId}/docs/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null; // Verified staff or admin
+    }
+
+    // Report Attachments (Photos of damaged equipment, leaked pipes, etc.)
+    match /colleges/{collegeId}/reports/{reportId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.resource.size < 10 * 1024 * 1024; // 10MB limit
+    }
+  }
+}
+
